@@ -2,12 +2,20 @@ import os
 import torch
 import random
 import numpy as np
+import pandas as pd
 from PIL import Image
 from scipy import stats
 from math import inf
+
 import torch.nn.functional as F
 from numpy.testing import assert_array_almost_equal
 from torchvision import datasets, transforms
+
+from data_tissue import TissueMNISTDataset
+from data_chex import CheXpertDataset
+from data_chex_i import CheXpertDatasetI
+from data_rsna import RSNAPneumoniaDataset
+
 
 class Dataset:
 
@@ -81,6 +89,26 @@ class Dataset:
                 self.is_noisy = is_noisy_labels[:]
                 self.train_set.cifar100.targets = train_noisy_labels_tensor.detach()
 
+        elif self.dataset_name == "tissue":
+            # Define transformations for the dataset
+
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: x.repeat(3, 1, 1))
+])
+            s = 28
+            self.num_classes = 8
+            self.input_size = s * s * 3
+            self.train_set = TissueMNISTDataset(split='train', size=s, transform=transform, download=True)
+            self.test_set = TissueMNISTDataset(split='val', size=s, transform=transform, download=True)
+
+
+            if noise_type is not None:
+                self.clean_labels = torch.tensor(self.train_set.targets)
+                train_noisy_labels_tensor, is_noisy_labels = self.make_labels_noisy()
+                self.is_noisy = is_noisy_labels[:]
+                self.train_set.targets = train_noisy_labels_tensor.detach()
+
         elif self.dataset_name == 'clothing1m':
             self.num_classes = 14
             self.input_size = 224 * 224 * 3
@@ -104,10 +132,198 @@ class Dataset:
                                         transform=self.transform_train)
             self.train_sampler = None
 
-
             self.test_set = Clothing1M(data_dir, num_samples=self.num_samples, mode='test',
                                        transform=self.transform_test)
 
+        elif self.dataset_name == 'isic':
+            s = 32
+            self.num_classes = 2
+            self.input_size = s * s * 3
+            self.num_samples = num_samples
+            isic_mean = [0.7251, 0.6000, 0.5407]
+            isic_std = [0.0939, 0.1310, 0.1540]
+
+            self.transform_train = transforms.Compose([
+                # transforms.Resize(256),
+                transforms.Resize(32),
+                transforms.RandomCrop(s),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(isic_mean, isic_std),
+            ])
+            self.transform_test = transforms.Compose([
+                # transforms.Resize(256),
+                transforms.Resize(32),
+                transforms.CenterCrop(s),
+                transforms.ToTensor(),
+                transforms.Normalize(isic_mean, isic_std),
+            ])
+            self.train_set = ISIC(data_dir, mode='train', transform=self.transform_train)
+            self.train_sampler = None
+
+            self.test_set = ISIC(data_dir, mode='test', transform=self.transform_test)
+
+            if noise_type is not None:
+                self.clean_labels = torch.tensor(self.train_set.train_labels)
+                train_noisy_labels_tensor, is_noisy_labels = self.make_labels_noisy()
+                self.is_noisy = is_noisy_labels[:]
+                self.train_set.train_labels = train_noisy_labels_tensor.detach()
+
+        elif self.dataset_name == "chex":
+            self.num_classes = 5
+            self.input_size = 180 * 180 * 3
+            transform = transforms.Compose([transforms.RandomHorizontalFlip(),
+                                    transforms.Resize((180, 180)),
+                                    transforms.RandomHorizontalFlip(),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                                    ])
+
+            self.train_set = CheXpertDataset(transform, mode="train")
+            self.train_sampler = None
+
+            self.test_set = CheXpertDataset(transform, mode="valid")
+
+            if noise_type is not None:
+                self.clean_labels = torch.tensor(self.train_set.train_labels)
+                train_noisy_labels_tensor, is_noisy_labels = self.make_labels_noisy(multi=True)
+                self.is_noisy = is_noisy_labels[:]
+                self.train_set.train_labels = train_noisy_labels_tensor.detach()
+
+        elif "chex" in self.dataset_name:
+            label_index = int(self.dataset_name.split("_")[-1])
+            
+            self.num_classes = 2
+            self.input_size = 180 * 180 * 3
+            transform = transforms.Compose([transforms.RandomHorizontalFlip(),
+                                    transforms.Resize((180, 180)),
+                                    transforms.RandomHorizontalFlip(),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                                    ])
+
+            self.train_set = CheXpertDatasetI(transform, mode="train", label_index=label_index, oversample=True)
+            self.train_sampler = None
+
+            self.test_set = CheXpertDatasetI(transform, mode="valid", label_index=label_index)
+
+            if noise_type is not None:
+                self.clean_labels = torch.tensor(self.train_set.labels)
+                train_noisy_labels_tensor, is_noisy_labels = self.make_labels_noisy()
+                self.is_noisy = is_noisy_labels[:]
+                self.train_set.train_labels = train_noisy_labels_tensor.detach()
+
+        elif self.dataset_name == "rsna":
+            self.num_classes = 2
+            self.input_size = 224 * 224 * 3
+            test_size = 0.3
+            self.num_samples = 8000
+            
+            transform_pipe_train = [transforms.ToPILImage(),
+                                    transforms.Resize(256),
+                                    transforms.CenterCrop(224),
+                                    transforms.ToTensor()]
+            
+            self.transform_train = transforms.Compose(transform_pipe_train)
+
+            transform_pipe_test = [transforms.ToPILImage(),
+                                   transforms.Resize(256),
+                                   transforms.CenterCrop(224),
+                                   transforms.ToTensor()]
+
+            self.transform_test = transforms.Compose(transform_pipe_test)
+            
+            self.dataset = RSNAPneumoniaDataset(transform=self.transform_train,
+                                     views=["PA", "AP"],
+                                     unique_patients=False)
+            
+            dataset_test = RSNAPneumoniaDataset(transform=self.transform_test,
+                                     views=["PA", "AP"],
+                                     unique_patients=False)
+            
+            indices = list(range(len(self.dataset)))
+
+            split = int(np.floor(test_size * len(self.dataset)))
+            np.random.shuffle(indices)
+            self.train_idx, self.test_idx = indices[split:], indices[:split]
+
+            # clean test targets
+            test_targets = self.dataset.labels[self.test_idx]
+            class_count_test = np.unique(test_targets, return_counts=True)[1]
+            weight_test = 1. / class_count_test
+            self.test_weights = torch.tensor(weight_test, dtype=torch.float)
+
+            if noise_type is not None:
+                self.clean_labels = torch.tensor(self.dataset.labels)
+                self.make_xray_labels_noisy()
+            
+            # making noisy train dataset balanced
+            class_num = torch.zeros(self.num_classes)
+            new_train_idx = []
+            for i in self.train_idx:
+                label = self.dataset.labels[i]
+                if class_num[label] < (self.num_samples / self.num_classes) and len(new_train_idx) < self.num_samples:
+                    new_train_idx.append(i)
+                    class_num[label] += 1
+            random.shuffle(new_train_idx)
+            self.train_idx = new_train_idx
+            print('Training dist. : ' + str(class_num))
+
+            # making test dataset balanced
+            class_num = torch.zeros(self.num_classes)
+            new_test_idx = []
+            for i in self.test_idx:
+                label = self.dataset.labels[i]
+                if class_num[label] < (self.num_samples / self.num_classes) and len(new_test_idx) < self.num_samples:
+                    new_test_idx.append(i)
+                    class_num[label] += 1
+            random.shuffle(new_test_idx)
+            self.test_idx = new_test_idx
+            print('Testing dist. : ' + str(class_num))
+            print('***********************************************************************')
+
+            self.train_sampler = None
+            
+            self.dataset.csv = self.dataset.csv.iloc[self.train_idx].reset_index(drop=True)
+            self.dataset.labels = self.dataset.labels[self.train_idx]
+            self.train_set = self.dataset
+            self.clean_labels = self.clean_labels[self.train_idx]
+            dataset_test.csv = dataset_test.csv.iloc[self.test_idx].reset_index(drop=True)
+            dataset_test.labels = dataset_test.labels[self.test_idx]
+            self.test_set = dataset_test
+
+    def set_target(self, key, target):
+        if self.dataset_name == "cifar10":
+            self.train_set.cifar10.targets[key] = target
+        elif self.dataset_name == "cifar100":
+            self.train_set.cifar100.targets[key] = target
+        elif self.dataset_name == "tissue":
+            self.train_set.targets[key] = target
+        elif self.dataset_name == "clothing1m":
+            pass # TODO: to be implemented
+        elif self.dataset_name == "isic" or "chex" in self.dataset_name:
+            self.train_set.train_labels[key] = target
+        elif self.dataset_name == "rsna":
+            self.train_set.labels[key] = target
+        else:
+            raise Exception("Not handled")
+
+    def get_targets(self):
+        if self.dataset_name == "cifar10":
+            return self.train_set.cifar10.targets
+        elif self.dataset_name == "cifar100":
+            return self.train_set.cifar100.targets
+        elif self.dataset_name == "tissue":
+            return self.train_set.targets
+        elif self.dataset_name == "clothing1m":
+            return None # TODO: to be implemented
+        elif self.dataset_name == "isic" or "chex" in self.dataset_name:
+            return self.train_set.train_labels
+        elif self.dataset_name == "rsna":
+            return self.train_set.labels
+        else:
+            raise Exception("Not handled")      
+         
     # ------------------------------------------------------------------------------------------------------------------
     # Taken from https://github.com/xiaoboxia/CDR/blob/6665a8ba265f0f60291ed7775042575db05bed61/utils.py
     def make_labels_noisy(self):
@@ -156,6 +372,38 @@ class Dataset:
         print('Actual_noise_rate : {}'.format(actual_noise_rate))
         return torch.tensor(np.squeeze(noisy_labels)), is_noisy
 
+
+    def make_xray_labels_noisy(self):
+        map_file_path = '../rsna/rsna_to_nih.csv'
+        map_df = pd.read_csv(map_file_path)
+        for idx in self.train_idx:
+            patient_id = self.dataset.csv['patientid'][idx]
+            matched_row = map_df.loc[map_df['patientId'] == patient_id].iloc[0]
+            orig_label_arr = matched_row['orig_labels'].split(';')
+            if self.dataset.labels[idx] == 1:
+                if 'Pneumonia' in orig_label_arr:
+                    pass
+                elif (
+                        'Consolidation' in orig_label_arr or
+                        'Infiltration' in orig_label_arr) and \
+                        'Pneumonia' not in orig_label_arr:
+                    if torch.rand(1) <= self.noise_rate:
+                        self.dataset.labels[idx] = 0
+                elif 'No Finding' in orig_label_arr:
+                    self.dataset.labels[idx] = 0
+                else:
+                    self.dataset.labels[idx] = 0
+            elif self.dataset.labels[idx] == 0:
+                if 'Pneumonia' in orig_label_arr:
+                    self.dataset.labels[idx] = 1
+
+                elif ('Consolidation' in orig_label_arr or 'Infiltration' in orig_label_arr) and \
+                        ('Pneumonia' not in orig_label_arr):
+                    if torch.rand(1) <= self.noise_rate:
+                        self.dataset.labels[idx] = 1
+                else:
+                    pass
+    
     # ------------------------------------------------------------------------------------------------------------------
     # Taken from https://github.com/xiaoboxia/CDR/blob/6665a8ba265f0f60291ed7775042575db05bed61/utils.py
     def compute_noise_transition_symmetric(self):
@@ -349,3 +597,71 @@ class Cifar100(Dataset):
 
     def __len__(self):
         return len(self.cifar100)
+
+# ----------------------------------------------------------------------------------------------------------------
+class ISIC(torch.utils.data.Dataset):
+    def __init__(self, root, mode='train',
+                 soft=False, target_prob=None,
+                 transform=None, target_transform=None, num_classes=14, num_samples=0):
+        self.root = root
+        self.mode = mode
+        self.soft = soft
+        self.target_prob = target_prob
+        self.transform = transform
+        self.target_transform = target_transform
+
+        train_labels_path = os.path.join(root, 'ISBI2016_ISIC_Part3_Training_GroundTruth.csv')
+        self.train_labels = self.file_reader(train_labels_path, mode="train")
+        test_labels_path = os.path.join(root, 'ISBI2016_ISIC_Part3_Test_GroundTruth.csv')
+        self.test_labels = self.file_reader(test_labels_path, mode="test")
+
+        if self.mode == 'train':
+            file_path = os.path.join(root, "ISBI2016_ISIC_Part3_Training_Data")
+            self.imgs = [os.path.join(file_path, img_name) for img_name in os.listdir(file_path)]
+            print('Number of training samples : ' + str(len(self.imgs)))
+
+        if self.mode == 'test':
+            file_path = os.path.join(root, "ISBI2016_ISIC_Part3_Test_Data")
+            self.imgs = [os.path.join(file_path, img_name) for img_name in os.listdir(file_path)]
+
+    def __getitem__(self, index):
+        impath = self.imgs[index]
+        if self.mode == 'train':
+            target = self.train_labels[index]
+        else:
+            target = self.test_labels[index]
+        img = Image.open(impath).convert("RGB")
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, target, index
+
+    def __len__(self):
+        return len(self.imgs)
+
+    def file_reader(self, path, mode):
+        file_data = []
+        with open(path, 'r') as rf:
+            for line in rf.readlines():
+                row = line.strip().split(',')
+                # Convert 'benign' to 0 and 'malignant' to 1
+                if mode == "train":
+                    label = 0 if row[1] == 'benign' else 1
+                else:
+                    label = 0 if row[1] == '0.0' else 1
+                file_data.append(label)
+        return file_data
+
+    def set_corrected_labels_(self, corrected_labels):
+        for key, value in corrected_labels.items():
+            self.train_labels[key] = value
+            
+
+if __name__ == "__main__":
+
+    ci = Cifar100(root='./data',
+                  train=True,
+                  transform=None,
+                  download=True)
+    print(ci.cifar100.targets)
