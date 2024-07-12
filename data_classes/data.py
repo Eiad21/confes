@@ -11,10 +11,10 @@ import torch.nn.functional as F
 from numpy.testing import assert_array_almost_equal
 from torchvision import datasets, transforms
 
-from data_tissue import TissueMNISTDataset
-from data_chex import CheXpertDataset
-from data_chex_i import CheXpertDatasetI
-from data_rsna import RSNAPneumoniaDataset
+from data_classes.data_tissue import TissueMNISTDataset
+from data_classes.data_chex import CheXpertDataset
+from data_classes.data_chex_i import CheXpertDatasetI
+from data_classes.data_rsna import RSNAPneumoniaDataset
 
 
 class Dataset:
