@@ -6,30 +6,47 @@ class Net:
     def __init__(self,
                  model_name,
                  num_classes,
-                 pre_train):
+                 pre_train,
+                 use_dropout=False,
+                 dropout_rate=0.5):
+        
+        self.use_dropout = use_dropout
+        self.dropout_rate = dropout_rate
+
         if model_name == 'resnet34':
             self.model = models.resnet34(pretrained=pre_train)
             input_last_layer = self.model.fc.in_features
-            self.model.fc = nn.Linear(input_last_layer, num_classes)
+            layers = [nn.Linear(input_last_layer, num_classes)]
+            if self.use_dropout:
+                layers.insert(0, nn.Dropout(p=self.dropout_rate))
+            self.model.fc = nn.Sequential(*layers)
 
         elif model_name == 'preact-resnet18':
-            self.model = ResNet18(num_classes=num_classes)
+            self.model = ResNet18(num_classes=num_classes, 
+                                  use_dropout=self.use_dropout, 
+                                  dropout_rate=self.dropout_rate)
 
         elif model_name == 'resnet50':
             self.model = models.resnet50(pretrained=pre_train)
             input_last_layer = self.model.fc.in_features
-            self.model.fc = nn.Linear(input_last_layer, num_classes)
+            layers = [nn.Linear(input_last_layer, num_classes)]
+            if self.use_dropout:
+                layers.insert(0, nn.Dropout(p=self.dropout_rate))
+            self.model.fc = nn.Sequential(*layers)
 
         print('Initializing  model {}'.format(model_name))
+
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Taken from https://github.com/shengliu66/ELR/blob/master/ELR_plus/model/PreResNet.py
 def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
 
+
 class PreActBlock(nn.Module):
     '''Pre-activation version of the BasicBlock.'''
     expansion = 1
+
     def __init__(self, in_planes, planes, stride=1):
         super(PreActBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
@@ -42,6 +59,7 @@ class PreActBlock(nn.Module):
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False)
             )
+
     def forward(self, x):
         out = F.relu(self.bn1(x))
         shortcut = self.shortcut(out)
@@ -50,10 +68,13 @@ class PreActBlock(nn.Module):
         out += shortcut
         return out
 
+
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, use_dropout=False, dropout_rate=0.5):
         super(ResNet, self).__init__()
         self.in_planes = 64
+        self.use_dropout = use_dropout
+        self.dropout_rate = dropout_rate
 
         self.conv1 = conv3x3(3, 64)
         self.bn1 = nn.BatchNorm2d(64)
@@ -62,6 +83,8 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.linear = nn.Linear(512 * block.expansion, num_classes)
+        if self.use_dropout:
+            self.dropout = nn.Dropout(p=self.dropout_rate)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -88,10 +111,11 @@ class ResNet(nn.Module):
         if lout > 4:
             out = F.avg_pool2d(out, 4)
             out = out.view(out.size(0), -1)
+            if self.use_dropout:
+                out = self.dropout(out)
             out = self.linear(out)
         return out
 
-def ResNet18(num_classes=10):
-    return ResNet(PreActBlock, [2, 2, 2, 2], num_classes=num_classes)
 
-
+def ResNet18(num_classes=10, use_dropout=False, dropout_rate=0.5):
+    return ResNet(PreActBlock, [2, 2, 2, 2], num_classes=num_classes, use_dropout=use_dropout, dropout_rate=dropout_rate)
